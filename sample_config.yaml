@@ -1,0 +1,32 @@
+# Sample configuration file for the updated email flow
+# This file contains the SQL queries and email template configuration
+
+template_directory: "templates"
+template_file: "closed_account_email.html"
+
+csv_header:
+  - "ACCTNBR"
+  - "MEMBERNAME"
+  - "EMAILADDR"
+  - "EMAILDATE"
+  - "BALANCE"
+  - "RESULT"
+
+get_closed_accounts: |
+  SELECT DISTINCT
+      a.acctnbr AS ACCTNBR,
+      p.firstname || ' ' || p.lastname AS MEMBERNAME,
+      pe.emailaddr AS EMAILADDR,
+      TO_CHAR(SYSDATE, 'MM/DD/YYYY') AS EMAILDATE,
+      NVL(a.currentbalance, 0) AS BALANCE,
+      n.noteclasscd AS FDI_NOTECLASSCD,
+      TO_CHAR(n.inactivedate, 'MM/DD/YYYY') AS FDI_INACTIVE_DATE
+  FROM acct a
+  JOIN pers p ON a.taxrptforpersnbr = p.persnbr
+  LEFT JOIN persemail pe ON p.persnbr = pe.persnbr AND pe.emailtypcd = 'PRIM'
+  LEFT JOIN acctnote n ON a.acctnbr = n.acctnbr AND n.noteclasscd = '8FDI'
+  WHERE a.mjaccttypcd IN ({{minor_codes}})
+    AND a.curracctstatcd = 'CLS'
+    AND a.closeddate >= TO_DATE(:effdate, 'MM-DD-YYYY')
+    AND pe.emailaddr IS NOT NULL
+  ORDER BY a.acctnbr
