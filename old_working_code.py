@@ -104,11 +104,22 @@ def run():
 
     # send email if fails and at least one recipient
     if fails and apwx.args.EMAIL_RECIPIENTS and apwx.args.SEND_EMAIL_YN == 'Y':
-        smtp_server = apwx.args.SMTP_SERVER
         from_addr = apwx.args.FROM_EMAIL_ADDR
         recipients = apwx.args.EMAIL_RECIPIENTS.split(',')
 
-        send_legacy_email(smtp_server, from_addr, recipients)
+        # Validate email addresses before sending
+        valid_recipients = []
+        for recipient in recipients:
+            recipient = recipient.strip()
+            if validate_email(recipient):
+                valid_recipients.append(recipient)
+            else:
+                print(f"Invalid email address: {recipient}")
+        
+        if valid_recipients:
+            send_legacy_email(apwx, from_addr, valid_recipients)
+        else:
+            print("No valid email recipients found.")
     elif fails and apwx.args.EMAIL_RECIPIENTS is None and apwx.args.SEND_EMAIL_YN == 'Y':
         print(f'SEND_EMAIL_YN == {apwx.args.SEND_EMAIL_YN}. No email recipients found.')
     else:
@@ -140,10 +151,10 @@ def parse_args(apwx: Apwx) -> Apwx:
     parser = apwx.parser
     parser.add_arg(str(AppWorxEnum.TNS_SERVICE_NAME), type=str, required=True)
     parser.add_arg(
-        str(AppWorxEnum.CONFIG_FILE_PATH), type=r"(.yml|.yaml)$", required=True
+        str(AppWorxEnum.CONFIG_FILE_PATH), type=r"(.yml|.yaml)$", required=False
     )
     parser.add_arg(
-        str(AppWorxEnum.EFFDATE), type=r"\d{2}[-\.\\/]\d{2}[-\.\\/]\d{4}", required=True
+        str(AppWorxEnum.EFFDATE), type=r"\d{2}[-\.\\/]\d{2}[-\.\\/]\d{4}", required=False
     )
     parser.add_arg(
         str(AppWorxEnum.FROM_EMAIL_ADDR),
@@ -172,17 +183,18 @@ def parse_args(apwx: Apwx) -> Apwx:
     parser.add_arg(
         str(AppWorxEnum.SMTP_PORT),
         type=int,
-        required=True,
+        required=False,
+        default=25,
     )
     parser.add_arg(
         str(AppWorxEnum.SMTP_USER),
         type=str,
-        required=True,
+        required=False,
     )
     parser.add_arg(
         str(AppWorxEnum.SMTP_PASSWORD),
         type=str,
-        required=True,
+        required=False,
     )
     parser.add_arg(
         str(AppWorxEnum.TEST_EMAIL_ADDR),
@@ -195,7 +207,7 @@ def parse_args(apwx: Apwx) -> Apwx:
                    required=False)
     parser.add_arg(str(AppWorxEnum.RPTONLY_YN), choices=['Y', 'N'], required=True)
     parser.add_arg(str(AppWorxEnum.FULL_CLEANUP_YN), choices=['Y', 'N'], required=True)
-    parser.add_arg(str(AppWorxEnum.EMAIL_RECIPIENTS), type=r'([\w\.]+@firsttechfed\.com,?)+', ignore_case=True, required=True)
+    parser.add_arg(str(AppWorxEnum.EMAIL_RECIPIENTS), type=r'([\w\.]+@firsttechfed\.com,?)+', ignore_case=True, required=False)
     
     apwx.parse_args()
     return apwx
@@ -797,21 +809,47 @@ def send_smtp_request(
         server.sendmail(from_address, to_address, email_message.as_string())
 
 
-def send_legacy_email(smtp_server, from_addr, recipients):
-    """Legacy email function for backward compatibility"""
+def send_legacy_email(apwx, from_addr, recipients):
+    """Updated legacy email function with enhanced SMTP handling"""
     msg = EmailMessage()
 
     msg['Subject'] = f'Statement Delivery Method Update Alert'
-    msg['From'] = from_addr
+    msg['From'] = f"First Tech Federal Credit Union <{from_addr}>"
     msg['To'] = recipients
 
     content = f'One or more statement delivery method updates has failed.  Please see log file(s) in Identifi.'
     msg.set_content(content)
 
-    s = smtplib.SMTP(smtp_server)
-    s.send_message(msg)
-    s.quit()
-    return True
+    # Don't send if we're on local dev env or the SEND_EMAIL_YN parameter is N
+    if is_local_environment() or apwx.args.SEND_EMAIL_YN.upper() != 'Y':
+        print("Email send disabled")
+        return False
+
+    try:
+        smtp_server = apwx.args.SMTP_SERVER
+        smtp_port = int(getattr(apwx.args, 'SMTP_PORT', 25))  # Default to 25 if not provided
+        smtp_user = getattr(apwx.args, 'SMTP_USER', None)
+        smtp_password = getattr(apwx.args, 'SMTP_PASSWORD', None)
+
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            print(f"Connecting to SMTP server {smtp_server}:{smtp_port}")
+            server.connect(smtp_server, smtp_port)
+            server.ehlo()
+            
+            # Use STARTTLS if credentials are provided
+            if smtp_user and smtp_password:
+                server.starttls()
+                server.ehlo()
+                print(f"Logging into {smtp_server} as {smtp_user}")
+                server.login(smtp_user, smtp_password)
+            
+            print(f"Sending email...")
+            server.sendmail(from_addr, recipients, msg.as_string())
+            
+        return True
+    except Exception as e:
+        print(f"An exception was encountered sending email to {recipients}.", e)
+        return False
 
 
 if __name__ == '__main__':
